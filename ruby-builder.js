@@ -51,35 +51,10 @@ export async function install(platform, engine, version) {
 
   if (!inToolCache) {
     await io.mkdirP(rubyPrefix)
-    if (engine === 'truffleruby+graalvm') {
-      await installWithRubyBuild(engine, version, rubyPrefix)
-    } else {
-      await downloadAndExtract(platform, engine, version, rubyPrefix)
-    }
-  }
-
-  // https://github.com/oracle/truffleruby/issues/3390
-  if (engine.startsWith('truffleruby') && common.floatVersion(version) >= 24.0 && !common.isSelfHostedRunner() && common.getOSNameVersionArch() === 'macos-12-x64') {
-    console.log('Setting MACOSX_DEPLOYMENT_TARGET=11.0 to workaround bug in XCode 14.2 linker not respecting RTLD_LAZY, see https://github.com/oracle/truffleruby/issues/3390')
-    core.exportVariable('MACOSX_DEPLOYMENT_TARGET', '11.0')
+    await downloadAndExtract(platform, engine, version, rubyPrefix)
   }
 
   return rubyPrefix
-}
-
-async function installWithRubyBuild(engine, version, rubyPrefix) {
-  const tmp = process.env['RUNNER_TEMP'] || os.tmpdir()
-  const rubyBuildDir = path.join(tmp, 'ruby-build-for-setup-ruby')
-  await common.measure('Cloning ruby-build', async () => {
-    await exec.exec('git', ['clone', 'https://github.com/rbenv/ruby-build.git', rubyBuildDir])
-  })
-
-  const rubyName = `${engine}-${version === 'head' ? 'dev' : version}`
-  await common.measure(`Installing ${engine}-${version} with ruby-build`, async () => {
-    await exec.exec(`${rubyBuildDir}/bin/ruby-build`, [rubyName, rubyPrefix])
-  })
-
-  await io.rmRF(rubyBuildDir)
 }
 
 async function downloadAndExtract(platform, engine, version, rubyPrefix) {
@@ -88,7 +63,17 @@ async function downloadAndExtract(platform, engine, version, rubyPrefix) {
   const downloadPath = await common.measure('Downloading Ruby', async () => {
     const url = getDownloadURL(platform, engine, version)
     console.log(url)
-    return await tc.downloadTool(url)
+    try {
+      return await tc.downloadTool(url)
+    } catch (error) {
+      if (error.message.includes('404')) {
+        throw new Error(`Unavailable version ${version} for ${engine} on ${platform}
+          You can request it at https://github.com/ruby/setup-ruby/issues
+          Cause: ${error.message}`)
+      } else {
+        throw error
+      }
+    }
   })
 
   await common.measure('Extracting  Ruby', async () => {
@@ -125,5 +110,9 @@ function getDownloadURL(platform, engine, version) {
 }
 
 function getLatestHeadBuildURL(platform, engine, version) {
-  return `https://github.com/ruby/${engine}-dev-builder/releases/latest/download/${engine}-${version}-${platform}.tar.gz`
+  var repo = `${engine}-dev-builder`
+  if (engine === 'truffleruby+graalvm') {
+    repo = 'truffleruby-dev-builder'
+  }
+  return `https://github.com/ruby/${repo}/releases/latest/download/${engine}-${version}-${platform}.tar.gz`
 }
